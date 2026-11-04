@@ -1,0 +1,18 @@
+# Environment and secrets
+.env
+*.env
+src/.env
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+
+# Generated artifacts
+*.png
+*.jpg
+*.jpeg
+*.ogg
+*.wav
+*.mp4

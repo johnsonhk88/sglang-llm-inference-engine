@@ -1,0 +1,113 @@
+{{- $port := .Values.service.port }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sglang.fullname" . }}
+  labels:
+    {{- include "sglang.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "sglang.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "sglang.selectorLabels" . | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - python3
+            - -m
+            - sglang.launch_server
+          args:
+            - --model-path
+            - {{ .Values.model | quote }}
+            - --host
+            - "0.0.0.0"
+            - --port
+            - {{ $port | quote }}
+            {{- if .Values.servedModelName }}
+            - --served-model-name
+            - {{ .Values.servedModelName | quote }}
+            {{- end }}
+            {{- if not (or (empty .Values.memFractionStatic) (eq (toString .Values.memFractionStatic) "null")) }}
+            - --mem-fraction-static
+            - {{ .Values.memFractionStatic | quote }}
+            {{- end }}
+            {{- if not (or (empty .Values.contextLength) (eq (toString .Values.contextLength) "null")) }}
+            - --context-length
+            - {{ .Values.contextLength | quote }}
+            {{- end }}
+            {{- if not (or (empty .Values.maxRunningRequests) (eq (toString .Values.maxRunningRequests) "null")) }}
+            - --max-running-requests
+            - {{ .Values.maxRunningRequests | quote }}
+            {{- end }}
+            {{- if not (or (empty .Values.tensorParallelSize) (eq (toString .Values.tensorParallelSize) "null")) }}
+            - --tp-size
+            - {{ .Values.tensorParallelSize | quote }}
+            {{- end }}
+            {{- if .Values.enableMetrics }}
+            - --enable-metrics
+            {{- end }}
+            {{- with .Values.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ $port }}
+              protocol: TCP
+          env:
+            {{- $secretName := .Values.existingSecret | default (printf "%s-hf-token" (include "sglang.fullname" .)) }}
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: HF_TOKEN
+                  optional: true
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: HF_TOKEN
+                  optional: true
+            - name: HF_XET_HIGH_PERFORMANCE
+              value: "1"
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          volumeMounts:
+            - name: shm
+              mountPath: /dev/shm
+            {{- if .Values.cache.enabled }}
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+            {{- end }}
+      volumes:
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.shm.sizeLimit }}
+        {{- if .Values.cache.enabled }}
+        - name: hf-cache
+          hostPath:
+            path: {{ .Values.cache.hostPath }}
+            type: DirectoryOrCreate
+        {{- end }}

@@ -1,0 +1,76 @@
+# Default values for sglang.
+
+replicaCount: 1
+
+model: "Qwen/Qwen3-0.6B"
+servedModelName: "qwen-small"
+
+image:
+  repository: lmsysorg/sglang
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 30000
+  nodePort: 30300
+
+# Fraction of GPU memory for weights + KV cache. Omit when null.
+memFractionStatic: 0.8
+
+# Deploy-time serving knobs (omit the SGLang flag when null)
+contextLength: null
+maxRunningRequests: null
+tensorParallelSize: null
+
+# Extra arguments passed to sglang.launch_server (e.g. ["--trust-remote-code"])
+extraArgs: []
+
+# Prometheus /metrics (SGLang --enable-metrics)
+enableMetrics: true
+
+# Prometheus Operator ServiceMonitor (requires cluster CRD; default off)
+monitoring:
+  enabled: false
+  serviceMonitor:
+    interval: 15s
+    scrapeTimeout: 10s
+    path: /metrics
+    labels: {}
+
+# Hugging Face token (leave empty if not needed or using existingSecret)
+hfToken: ""
+existingSecret: ""
+
+# Compute Resources
+resources:
+  limits:
+    nvidia.com/gpu: 1
+    memory: 16Gi
+    cpu: 8
+  requests:
+    nvidia.com/gpu: 1
+    memory: 4Gi
+    cpu: 2
+
+# Shared memory volume (/dev/shm) required for tensor parallelism
+shm:
+  sizeLimit: 16Gi
+
+# Cache mounting (shares host ~/.cache/huggingface to avoid re-downloading)
+cache:
+  enabled: true
+  hostPath: "/home/johnsonhk88/.cache/huggingface"
+
+# Health Probes
+probes:
+  readiness:
+    path: /v1/models
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    failureThreshold: 60
+  liveness:
+    path: /health
+    initialDelaySeconds: 120
+    periodSeconds: 15
+    failureThreshold: 5
