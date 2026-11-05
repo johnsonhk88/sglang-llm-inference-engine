@@ -95,22 +95,51 @@ helm upgrade --install sglang ./helm/sglang \
 
 The directory must exist on the **GPU node** that schedules the pod.
 
-## 9. `/metrics` missing or Grafana empty
+## 9. `/metrics` missing or Prometheus target DOWN
 
-**Symptom:** `curl http://localhost:30000/metrics` is 404, or Prometheus target `host.docker.internal:30000` is DOWN.
+**Symptom:** `curl http://localhost:30000/metrics` is 404, or the Prometheus target `host.docker.internal:30000` / `sglang` is DOWN.
 
-**Causes:**
+**Causes and fixes:**
 
-- Docker/Helm `--enable-metrics` was turned off (`enableMetrics=false`).
-- Kubernetes Service is ClusterIP and nothing is port-forwarded to localhost:30000.
-- No traffic yet — counters stay at 0 until you run `./src/bench-sglang.sh`.
+1. **SGLang started without metrics.** Docker and Helm enable `--enable-metrics` by default; check for `enableMetrics=false` or a custom `extraArgs` override.
 
-**Fix:**
+   ```bash
+   curl -s http://localhost:30000/metrics | head
+   ```
+
+   Expect `# HELP sglang:` lines. A 404 means the flag is missing.
+
+2. **ClusterIP with no local forward.** Port-forward the Service, then retry:
+
+   ```bash
+   ./src/run-sglang-k8s.sh --port-forward
+   curl -s http://localhost:30000/metrics | grep sglang:generation_tokens_total
+   ```
+
+3. **Wrong target host or port.** For the Docker Compose stack the target is `host.docker.internal:30000`. Check http://localhost:9090/targets and the target's **Last error**. `connection refused` means nothing is listening; `context deadline exceeded` points to a network, DNS, or firewall problem.
+
+4. **ServiceMonitor not discovered.** Check that it exists and that its labels match the Prometheus `serviceMonitorSelector`:
+
+   ```bash
+   kubectl get servicemonitor -A
+   kubectl get prometheus -A -o yaml | grep -A10 serviceMonitorSelector
+   ```
+
+   Also confirm the endpoint `port: http` matches the Service port name.
+
+5. **No traffic yet.** Counters stay at 0 until requests arrive:
+
+   ```bash
+   ./src/bench-sglang.sh --model qwen-small
+   ```
+
+Query `up{job=~".*sglang.*"}` in Prometheus. `1` is healthy; `0` means Prometheus is running but the scrape failed.
+
+If the target is a Kubernetes Service, test in-cluster reachability with a debug pod (adjust the Service name and namespace):
 
 ```bash
-./src/run-sglang-k8s.sh --port-forward
-curl -s http://localhost:30000/metrics | grep sglang:generation_tokens_total
-./src/bench-sglang.sh --model qwen-small
+kubectl run curl --rm -it --image=curlimages/curl --restart=Never -- \
+  curl -s http://sglang-service.default.svc.cluster.local:30000/metrics | head
 ```
 
 Check Prometheus targets at http://localhost:9090/targets after `docker compose -f monitoring/docker-compose.yml up -d`.

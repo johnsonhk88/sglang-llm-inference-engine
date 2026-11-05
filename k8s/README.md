@@ -118,7 +118,20 @@ helm upgrade --install sglang ./helm/sglang \
   --set resources.requests."nvidia\.com/gpu"=2
 ```
 
-Scrape metrics (requires Prometheus Operator on the cluster — not vendored):
+### Prometheus scraping (ServiceMonitor)
+
+`--enable-metrics` is on by default, so each SGLang pod exposes `/metrics` on the
+Service port named `http` (30000). The chart does **not** install Prometheus.
+Install Prometheus Operator first, for example kube-prometheus-stack:
+
+```bash
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+  --namespace monitoring --create-namespace
+```
+
+Then opt in when deploying SGLang:
 
 ```bash
 helm upgrade --install sglang ./helm/sglang \
@@ -126,9 +139,72 @@ helm upgrade --install sglang ./helm/sglang \
   --set monitoring.serviceMonitor.labels.release=kube-prometheus-stack
 ```
 
+`monitoring.serviceMonitor.labels.release` must match the label
+kube-prometheus-stack uses to select ServiceMonitors. With default values, that
+is the Helm release name (`kube-prometheus-stack`). If the namespaces differ and
+targets do not appear, check the Prometheus CR's
+`serviceMonitorNamespaceSelector`.
+
+Verify discovery and scrape:
+
+```bash
+kubectl get servicemonitor -l app.kubernetes.io/name=sglang
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:9090
+# open http://localhost:9090/targets and search for sglang
+```
+
+Scrape settings are configurable (keep the label from the command above so
+Prometheus still selects the ServiceMonitor):
+
+```bash
+helm upgrade --install sglang ./helm/sglang \
+  --set monitoring.enabled=true \
+  --set monitoring.serviceMonitor.labels.release=kube-prometheus-stack \
+  --set monitoring.serviceMonitor.interval=15s \
+  --set monitoring.serviceMonitor.scrapeTimeout=10s \
+  --set monitoring.serviceMonitor.path=/metrics
+```
+
+Raw manifests (`k8s/sglang.yaml`) enable metrics but do not create a
+ServiceMonitor. Add one manually:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: sglang
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: sglang
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+```
+
+The selector matches the `app: sglang` label on `sglang-service`, and
+`port: http` matches its port name. Apply it in a namespace watched by your
+Prometheus instance.
+
+If Prometheus is in-cluster but not Operator-managed, scrape the Service DNS
+name directly:
+
+```yaml
+scrape_configs:
+  - job_name: sglang
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - sglang-service.default.svc.cluster.local:30000
+```
+
 Import [`monitoring/grafana/dashboards/sglang-capacity.json`](../monitoring/grafana/dashboards/sglang-capacity.json)
 into cluster Grafana for GPU/CPU/RAM, KV-cache, waiting-request queue, and
-token throughput. Panel-by-panel usage: [`monitoring/README.md`](../monitoring/README.md).
+token throughput. PromQL examples, alerts, and troubleshooting:
+[`monitoring/README.md`](../monitoring/README.md).
 
 ---
 
@@ -165,4 +241,4 @@ kubectl delete -f k8s/sglang.yaml
 
 - **[k8s/USAGE.md](USAGE.md)**: Serving workflows, client access methods (ClusterIP, NodePort, In-Cluster), API examples, and tokens/s bench.
 - **[k8s/DEBUG_GUIDE.md](DEBUG_GUIDE.md)**: GPU addon, Helm KUBECONFIG, shared memory, probe failures, and `/metrics` scrape.
-- **[monitoring/README.md](../monitoring/README.md)**: Grafana **SGLang Capacity** dashboard and Docker Compose Prometheus.
+- **[monitoring/README.md](../monitoring/README.md)**: Prometheus scraping, PromQL, alerts, Grafana **SGLang Capacity** dashboard, and Docker Compose stack.

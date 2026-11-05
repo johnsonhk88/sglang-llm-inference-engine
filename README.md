@@ -299,17 +299,81 @@ The bench runner uses `docker run --network host lmsysorg/sglang:latest python3 
 
 ---
 
-## 5. GPU / CPU / Memory Monitoring
+## 5. Prometheus Monitoring (`monitoring/`)
 
-Capacity study uses Prometheus + Grafana + DCGM. Full operator guide: [`monitoring/README.md`](monitoring/README.md).
+Prometheus scrapes SGLang's `/metrics` endpoint; Grafana is only the visualization layer. DCGM and node-exporter add GPU and host metrics. Full operator guide: [`monitoring/README.md`](monitoring/README.md).
+
+### Step 1: Confirm SGLang exposes metrics
+
+The Docker launcher and Helm chart add `--enable-metrics` automatically. For a manual launch:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3-0.6B \
+  --host 0.0.0.0 \
+  --port 30000 \
+  --enable-metrics
+```
+
+```bash
+curl -s http://localhost:30000/metrics | head
+```
+
+A 404 means `--enable-metrics` is missing. Use `--host 0.0.0.0` when Prometheus runs in another container or on another host.
+
+### Step 2: Start Prometheus, Grafana, DCGM, and node-exporter
 
 ```bash
 docker compose -f monitoring/docker-compose.yml up -d
 ```
 
-Grafana is at http://localhost:3000 (`admin` / `admin`). Open dashboard **SGLang Capacity** (`/d/sglang-capacity`). Prometheus scrapes host port `30000` (`/metrics`) plus DCGM and node-exporter.
+| Service | URL |
+| --- | --- |
+| Prometheus | http://localhost:9090 |
+| Grafana (`admin` / `admin`) | http://localhost:3000 |
+| Dashboard **SGLang Capacity** | http://localhost:3000/d/sglang-capacity |
 
-You will see:
+The SGLang scrape job is defined in [`monitoring/prometheus/prometheus.yml`](monitoring/prometheus/prometheus.yml):
+
+```yaml
+- job_name: sglang
+  metrics_path: /metrics
+  static_configs:
+    - targets: ["host.docker.internal:30000"]
+```
+
+Open http://localhost:9090/targets and confirm `sglang` is **UP**, or query:
+
+```bash
+curl -sG http://localhost:9090/api/v1/query \
+  --data-urlencode 'query=up{job="sglang"}'
+```
+
+`"1"` is healthy; `"0"` means the scrape failed. See **Last error** on the target page. To scrape a different host or port, edit `prometheus.yml` and restart Prometheus.
+
+### Step 3: Query serving metrics
+
+Paste these into the Prometheus UI (http://localhost:9090):
+
+| Question | PromQL |
+| --- | --- |
+| Running / waiting requests | `sum(sglang:num_running_reqs)` / `sum(sglang:num_queue_reqs)` |
+| Prompt tokens/s | `sum(rate(sglang:prompt_tokens_total[1m]))` |
+| Generation tokens/s | `sum(rate(sglang:generation_tokens_total[1m]))` |
+| KV-cache fill | `avg(sglang:token_usage)` |
+| TTFT p95 | `histogram_quantile(0.95, sum by (le) (rate(sglang:time_to_first_token_seconds_bucket[5m])))` |
+| GPU utilization | `DCGM_FI_DEV_GPU_UTIL` |
+| GPU VRAM used | `DCGM_FI_DEV_FB_USED * 1024 * 1024` |
+
+Counters stay at 0 until traffic arrives:
+
+```bash
+./src/bench-sglang.sh --profile throughput --model qwen-small
+```
+
+### Step 4: Open the dashboard
+
+Grafana is at http://localhost:3000 (`admin` / `admin`). Open **SGLang Capacity** (`/d/sglang-capacity`). You will see:
 
 - **Token throughput** — prompt and generation tokens/s (`rate()` of counters)
 - **Queue** — requests running vs waiting
@@ -318,7 +382,9 @@ You will see:
 
 If SGLang is on Kubernetes `ClusterIP`, port-forward `30000` before starting this compose stack so Prometheus can scrape `host.docker.internal:30000`.
 
-Kubernetes scrape (opt-in; requires Prometheus Operator CRDs):
+### Kubernetes
+
+The chart does **not** install Prometheus. Install Prometheus Operator (kube-prometheus-stack, or `microk8s enable observability`), then opt in:
 
 ```bash
 helm upgrade --install sglang ./helm/sglang \
@@ -326,7 +392,9 @@ helm upgrade --install sglang ./helm/sglang \
   --set monitoring.serviceMonitor.labels.release=kube-prometheus-stack
 ```
 
-How to read the panels: [`monitoring/README.md`](monitoring/README.md).
+The ServiceMonitor label must match the Prometheus release selector. Verify the target in Prometheus. Full steps: [`monitoring/README.md#8-kubernetes`](monitoring/README.md#8-kubernetes) and [`k8s/README.md`](k8s/README.md#prometheus-scraping-servicemonitor).
+
+PromQL reference, scrape tuning, and alert examples: [`monitoring/README.md`](monitoring/README.md).
 
 ---
 
@@ -385,4 +453,4 @@ See [`k8s/DEBUG_GUIDE.md`](k8s/DEBUG_GUIDE.md) for GPU addon issues, Helm withou
 | [`k8s/README.md`](k8s/README.md) | Helm values, raw manifests, probes, ServiceMonitor |
 | [`k8s/USAGE.md`](k8s/USAGE.md) | Client access (ClusterIP / NodePort / in-cluster) and API examples |
 | [`k8s/DEBUG_GUIDE.md`](k8s/DEBUG_GUIDE.md) | GPU, shm, CUDA 13, cache, metrics scrape failures |
-| [`monitoring/README.md`](monitoring/README.md) | Grafana dashboard, PromQL, Docker Compose stack |
+| [`monitoring/README.md`](monitoring/README.md) | Prometheus scraping, PromQL, alerts, Grafana dashboard, Docker Compose stack |

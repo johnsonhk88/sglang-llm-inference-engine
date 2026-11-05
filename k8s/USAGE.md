@@ -160,7 +160,20 @@ Keep port-forward running (`./src/run-sglang-k8s.sh --port-forward`), then:
 curl -s http://localhost:30000/metrics | grep sglang:gen_throughput
 ```
 
-The Docker Compose Grafana stack scrapes host port `30000`. How to read the panels: [`monitoring/README.md`](../monitoring/README.md).
+The Docker Compose Grafana stack scrapes host port `30000` through `host.docker.internal:30000`. Bring it up from the repository root and confirm `sglang` is UP at http://localhost:9090/targets:
+
+```bash
+docker compose -f monitoring/docker-compose.yml up -d
+```
+
+For an in-cluster Prometheus, port-forward its Service and query the same PromQL:
+
+```bash
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:9090
+# open http://localhost:9090 and run: up{job=~".*sglang.*"}
+```
+
+How to read the panels and write PromQL: [`monitoring/README.md`](../monitoring/README.md).
 
 ### Stop Serving Engine / Clean Up
 
