@@ -135,6 +135,62 @@ response = litellm.completion(
 print(response.choices[0].message.content)
 ```
 
+### OpenCode (agent client)
+
+[OpenCode](https://opencode.ai) needs a custom OpenAI-compatible provider because it does not have a built-in SGLang runtime and does not auto-discover models for custom providers.
+
+With port-forward running (`./src/run-sglang-k8s.sh --port-forward`), discover the served IDs:
+
+```bash
+curl -s http://localhost:30000/v1/models \
+  | python3 -c 'import json,sys; [print(m["id"]) for m in json.load(sys.stdin)["data"]]'
+```
+
+Then add the provider to `~/.config/opencode/opencode.jsonc` (or a project `opencode.jsonc`):
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "sglang/qwen-small",
+  "providers": {
+    "sglang": {
+      "name": "SGLang (Kubernetes)",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "http://127.0.0.1:30000/v1"
+      },
+      "models": {
+        "qwen-small": {
+          "modelID": "qwen-small",
+          "name": "Qwen3 0.6B (SGLang)",
+          "capabilities": {
+            "tools": true,
+            "input": ["text"],
+            "output": ["text"]
+          },
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          },
+          "compatibility": {
+            "maxTokensField": "max_tokens"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Select it with `/models` in the TUI or verify from the CLI:
+
+```bash
+opencode models | grep '^sglang/'
+opencode run --model sglang/qwen-small "Explain Kubernetes pods in two sentences."
+```
+
+For `NodePort`, replace `baseURL` with the reachable URL, for example `http://<node-ip>:30300/v1`. If the server was launched with `--api-key`, add `"apiKey": "{env:SGLANG_API_KEY}"` under `settings`. Tool-calling agents also require SGLang to run with a matching `--tool-call-parser` (for example `qwen25`).
+
 > **Note on Model Name:** Always pass the `--name` value (`qwen-small`), not the full Hugging Face ID (`Qwen/Qwen3-0.6B`), in the `"model"` field of API requests.
 
 ---

@@ -239,6 +239,6 @@ kubectl delete -f k8s/sglang.yaml
 
 ## 6. Serving & Usage Guide
 
-- **[k8s/USAGE.md](USAGE.md)**: Serving workflows, client access methods (ClusterIP, NodePort, In-Cluster), API examples, and tokens/s bench.
+- **[k8s/USAGE.md](USAGE.md)**: Serving workflows, client access methods (ClusterIP, NodePort, In-Cluster), API examples, OpenCode integration, and tokens/s bench.
 - **[k8s/DEBUG_GUIDE.md](DEBUG_GUIDE.md)**: GPU addon, Helm KUBECONFIG, shared memory, probe failures, and `/metrics` scrape.
 - **[monitoring/README.md](../monitoring/README.md)**: Prometheus scraping, PromQL, alerts, Grafana **SGLang Capacity** dashboard, and Docker Compose stack.

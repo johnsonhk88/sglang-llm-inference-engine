@@ -398,6 +398,115 @@ PromQL reference, scrape tuning, and alert examples: [`monitoring/README.md`](mo
 
 ---
 
+## 6. OpenCode Integration (`opencode`)
+
+[OpenCode](https://opencode.ai) can use SGLang as its model backend. SGLang exposes an OpenAI-compatible API, but OpenCode has no built-in SGLang runtime — only Ollama, LM Studio, and vLLM are discovered automatically. Connect SGLang as a **custom OpenAI-compatible provider**.
+
+OpenCode does not auto-discover models for custom providers, so you must list the IDs your server returns from `/v1/models`.
+
+### Step 1: Discover the served model IDs
+
+Start SGLang first (Section 1 or Section 3), then:
+
+```bash
+# Pretty-print the model list
+curl -s http://localhost:30000/v1/models | python3 -m json.tool
+
+# Just the IDs
+curl -s http://localhost:30000/v1/models \
+  | python3 -c 'import json,sys; [print(m["id"]) for m in json.load(sys.stdin)["data"]]'
+```
+
+The repo helper prints the same inventory:
+
+```bash
+python3 src/test-sglang.py --mode models
+```
+
+Use the **API-visible name** (`--served-model-name` / `--name`), not the Hugging Face repo ID. With the quickstart above the ID is `qwen-small`.
+
+### Step 2: Add the provider to OpenCode
+
+Add this to the global `~/.config/opencode/opencode.jsonc`, or to a project `opencode.jsonc`:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "sglang/qwen-small",
+  "providers": {
+    "sglang": {
+      "name": "SGLang (local)",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "http://127.0.0.1:30000/v1"
+      },
+      "models": {
+        "qwen-small": {
+          "modelID": "qwen-small",
+          "name": "Qwen3 0.6B (SGLang)",
+          "capabilities": {
+            "tools": true,
+            "input": ["text"],
+            "output": ["text"]
+          },
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          },
+          "compatibility": {
+            "maxTokensField": "max_tokens"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Notes:
+
+- `sglang` is the provider prefix; the model reference is `sglang/qwen-small`.
+- Add one entry under `models` per ID returned by `/v1/models`. The map key is the OpenCode model ID; `modelID` is the exact string sent to SGLang (omit it when they match).
+- A provider has a single `baseURL`. For multiple SGLang servers or ports, define one provider ID per server (for example `sglang-a` and `sglang-b`).
+- If the server uses `--api-key`, add `"apiKey": "{env:SGLANG_API_KEY}"` under `settings` and export the variable before starting OpenCode.
+- Set `limit.context` to match the server's `--context-length` so OpenCode does not over-send.
+
+### Step 3: Select and test the model
+
+In the OpenCode TUI, run `/models`, or from the CLI:
+
+```bash
+opencode models | grep '^sglang/'
+opencode run --model sglang/qwen-small "What is the capital of France?"
+```
+
+Configuration hot-reloads; use `/reload` in the TUI if a change does not appear.
+
+### Step 4: Enable tool calling for agent use
+
+OpenCode agents need OpenAI-style `tool_calls`. Launch SGLang with the parser that matches the model:
+
+```bash
+./src/run-sglang-docker.sh \
+  --model Qwen/Qwen3-8B \
+  --name qwen3-8b \
+  --tool-call-parser qwen25 \
+  --reasoning-parser qwen3 \
+  --context-length 32768
+```
+
+- Qwen3 models commonly use `--tool-call-parser qwen25`; Qwen3-Coder variants use `qwen3_coder`.
+- Thinking models need `--reasoning-parser qwen3`. If reasoning arrives in a custom field, also set `"compatibility": { "reasoningField": "reasoning_content" }` on the model.
+- Without a tool-call parser, chat completions still work, but agent tools will fail or loop.
+
+### Kubernetes
+
+For a `ClusterIP` service, run `./src/run-sglang-k8s.sh --port-forward` first and keep using `http://127.0.0.1:30000/v1`. For `NodePort` or an Ingress, set `baseURL` to the reachable URL (for example `http://<node-ip>:30300/v1`). The URL must be reachable from the OpenCode server, not only from your shell.
+
+See [`k8s/USAGE.md`](k8s/USAGE.md#opencode-agent-client) for the Kubernetes-specific variant.
+
+---
+
 ## Troubleshooting
 
 ### `set: Illegal option -o pipefail`
@@ -440,6 +549,14 @@ Current `lmsysorg/sglang:latest` images require a CUDA 13-capable NVIDIA driver.
 
 `bench-sglang.sh` talks to `http://127.0.0.1:30000`. For Kubernetes ClusterIP, start port-forward first. If `/metrics` is empty or 404, the server was started without `--enable-metrics` (Docker and Helm enable it by default).
 
+### OpenCode cannot see or use the model
+
+- Confirm the server responds: `curl -s http://localhost:30000/v1/models`.
+- Custom providers do not auto-discover models. Every served ID must be listed under `providers.<id>.models`.
+- Check the reference: `opencode models | grep '^sglang/'`. The prefix is the provider ID, and the model key is case-sensitive.
+- Make sure `baseURL` ends in `/v1` and is reachable from the OpenCode server (port-forward Kubernetes `ClusterIP` first).
+- If chat works but agent tools fail, relaunch SGLang with a matching `--tool-call-parser` (for example `qwen25`).
+
 ### Kubernetes Troubleshooting
 
 See [`k8s/DEBUG_GUIDE.md`](k8s/DEBUG_GUIDE.md) for GPU addon issues, Helm without KUBECONFIG, hostPath cache, and probe failures.
@@ -451,6 +568,6 @@ See [`k8s/DEBUG_GUIDE.md`](k8s/DEBUG_GUIDE.md) for GPU addon issues, Helm withou
 | Doc | Contents |
 | --- | --- |
 | [`k8s/README.md`](k8s/README.md) | Helm values, raw manifests, probes, ServiceMonitor |
-| [`k8s/USAGE.md`](k8s/USAGE.md) | Client access (ClusterIP / NodePort / in-cluster) and API examples |
+| [`k8s/USAGE.md`](k8s/USAGE.md) | Client access (ClusterIP / NodePort / in-cluster), API examples, OpenCode setup |
 | [`k8s/DEBUG_GUIDE.md`](k8s/DEBUG_GUIDE.md) | GPU, shm, CUDA 13, cache, metrics scrape failures |
 | [`monitoring/README.md`](monitoring/README.md) | Prometheus scraping, PromQL, alerts, Grafana dashboard, Docker Compose stack |
